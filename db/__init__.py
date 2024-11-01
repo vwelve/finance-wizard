@@ -3,6 +3,7 @@ import sqlite3
 MESSAGE_DB = "messages.db"
 CHANNEL_DB = "channels.db"
 TOKEN_DB = "tokens.db"
+TOOLS_DB = "tools.db"
 
 msg_conn = sqlite3.connect(MESSAGE_DB)
 msg_cursor = msg_conn.cursor()
@@ -12,7 +13,8 @@ msg_cursor.execute('''
         id TEXT PRIMARY KEY,
         user_id TEXT NOT NULL,
         message_type TEXT NOT NULL,
-        content TEXT NOT NULL,
+        content TEXT,
+        has_tool INTEGER DEFAULT 0,
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
     )
 ''')
@@ -45,3 +47,20 @@ tk_cursor.execute('''
 
 tk_conn.commit()
 tk_conn.close()
+
+tools_conn = sqlite3.connect(TOOLS_DB)
+tools_cursor = tools_conn.cursor()
+
+tools_cursor.execute("""
+    CREATE TABLE IF NOT EXISTS tools (
+        message_id TEXT,
+        tool_id TEXT,
+        type TEXT NOT NULL,
+        name TEXT NOT NULL,
+        arguments TEXT NOT NULL,
+        PRIMARY KEY (message_id, tool_id)
+    )
+""")
+
+tools_conn.commit()
+tools_conn.close()

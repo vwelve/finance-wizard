@@ -1,8 +1,8 @@
 from typing import List, Dict, Any, Callable, Union
 import json
 
+from util.exceptions import ToolFunctionError
 from util.search_web import search_web
-
 
 TOOLS = [
     {
@@ -36,6 +36,19 @@ available_functions: AvailableFunctions = {
     "search_web": search_web
 }
 
+
+class ToolCall:
+    def __init__(self, _id: int, function: 'Function'):
+        self.id = _id
+        self.function = function
+
+
+class Function:
+    def __init__(self, name: str, arguments: str):
+        self.name = name
+        self.arguments = arguments
+
+
 async def handle_tools(tool_calls: List[ToolCall]) -> List[Dict[str, Any]]:
     """
     Handle OpenAI tool calls by invoking the appropriate functions and collecting their responses.
@@ -50,11 +63,11 @@ async def handle_tools(tool_calls: List[ToolCall]) -> List[Dict[str, Any]]:
     tool_responses = []
 
     for tool_call in tool_calls:
-        function_name = tool_call.function.name
+        function_name = tool_call["function"]["name"]
         function_to_call = available_functions.get(function_name)
 
         if function_to_call:
-            function_args = json.loads(tool_call.function.arguments)
+            function_args = json.loads(tool_call["function"]["arguments"])
 
             try:
                 function_response = await function_to_call(
@@ -62,10 +75,10 @@ async def handle_tools(tool_calls: List[ToolCall]) -> List[Dict[str, Any]]:
                 )
             except Exception as e:
                 raise ToolFunctionError(function_name, e)
-                
+
             tool_responses.append(
                 {
-                    "tool_call_id": tool_call.id,
+                    "tool_call_id": tool_call["id"],
                     "role": "tool",
                     "name": function_name,
                     "content": function_response,

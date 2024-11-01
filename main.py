@@ -1,4 +1,9 @@
 import asyncio
+
+from openai import AuthenticationError
+
+from discord import NotFound
+
 import discord
 from dotenv import load_dotenv
 from discord.ext import commands
@@ -38,12 +43,14 @@ async def start(ctx):
     else:
         uid = ctx.message.author.id
         channel_id = Database.get_user_channel(uid)
-
-        channel = await ctx.guild.fetch_channel(channel_id) if channel_id is not None else None
+        channel_id = int(channel_id) if bool(channel_id) else 0
+        channel = None
         user = ctx.message.author
         guild = ctx.guild
 
-        if not channel:
+        try:
+            channel = await ctx.guild.fetch_channel(channel_id)
+        except NotFound:
             overwrites = {
                 ctx.message.author: discord.PermissionOverwrite(view_channel=True, send_messages=True),
                 guild.default_role: discord.PermissionOverwrite(view_channel=False),
@@ -52,16 +59,17 @@ async def start(ctx):
 
             channel = await guild.create_text_channel(f"{user.name}-finance_wizard", overwrites=overwrites, position=0)
             Database.update_user_channel(uid, channel.id)
+        finally:
             token = Database.get_user_token(uid)
 
-        if token:
-            await ctx.send(f"""<@{uid}>
+            if token:
+                await channel.send(f"""<@{uid}>
 Here is your private channel to chat.
 
 Example:
 {COMMAND_PREFIX}gpt *prompt*""")
-        else:
-            await ctx.send(f"""
+            else:
+                await channel.send(f"""
 <@{uid}>
 Set your OpenAI token before trying to chat.
                 
@@ -74,6 +82,7 @@ Example:
 async def _token(ctx, *, token: str):
     uid = ctx.message.author.id
     channel_id = Database.get_user_channel(uid)
+    channel_id = int(channel_id) if bool(channel_id) else 0
 
     if channel_id == ctx.message.channel.id:
         Database.set_user_token(ctx.message.author.id, token)
@@ -87,6 +96,7 @@ async def _token(ctx, *, token: str):
 async def _gpt(ctx, *, prompt: str):
     uid = ctx.message.author.id
     channel_id = Database.get_user_channel(uid)
+    channel_id = int(channel_id) if bool(channel_id) else 0
     token = Database.get_user_token(uid)
     if ctx.channel.id != channel_id:
         await ctx.send(f"You can only run this command in your channel. If you can't find your channel do "
@@ -98,9 +108,9 @@ async def _gpt(ctx, *, prompt: str):
         discord_message = await ctx.send("Give me a sec...")
 
         try:
-            for message in fw.send_message(prompt):
+            async for message in fw.send_message(prompt):
                 await discord_message.edit(content=message)
-        except openai.error.AuthenticationError:
+        except AuthenticationError:
             await discord_message.edit(content="There was an authentication issue. Are you sure you properly set your "
                                                "OpenAI token?")
             logging.error("An OpenAIError occurred", exc_info=True)
