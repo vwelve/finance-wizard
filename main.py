@@ -1,97 +1,126 @@
 import asyncio
+
+from openai import AuthenticationError
+
+from discord import NotFound
+
+import discord
 from dotenv import load_dotenv
 from discord.ext import commands
-from openai import OpenAIError
-from exceptions import ToolFunctionError
-from gpt import send_openai_messages, get_message_history, set_message_history
-from utils import handle_tools
-import discord
+import openai
+
 import os
 import logging
 
+from db.database import Database
+from gpt.finance_wizard import FinanceWizard
+from util.exceptions import ToolFunctionError
+
+
 # Configure logging
-logging.basicConfig(filename='error.log', level=logging.ERROR)
+logging.basicConfig(filename='debug.log', level=logging.DEBUG)
 
 load_dotenv()
 ALLOWED_CHANNEL = int(os.getenv("ALLOWED_CHANNEL"))
 DEV_MODE = os.getenv("CODE_ENVIRONMENT") == "dev"
+COMMAND_PREFIX = "$"
 
 intents = discord.Intents.default()
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="$", intents=intents)
+bot = commands.Bot(command_prefix=COMMAND_PREFIX, intents=intents)
 
 
 @bot.event
 async def on_ready():
-    print(f'We have logged in as {bot.user}')
+    logging.info(f'We have logged in as {bot.user}')
 
 
-@bot.command(name='gpt', help='Responds with AI-generated text based on your prompt')
-async def _gpt(ctx, *, prompt: str):
+@bot.command(name="start")
+async def start(ctx):
     if not DEV_MODE and ctx.channel.id != ALLOWED_CHANNEL:
         await ctx.send(f"I can only reply in <#{ALLOWED_CHANNEL}>")
     else:
         uid = ctx.message.author.id
-        message_history = get_message_history(uid)
-        message = [
-            {
-                "role": "user",
-                "content": prompt
-            },
-            *[
-                {
-                    "type": "image_url",
-                    "image_url":
-                        {
-                            "url": attachment.url
-                        }
-                }
-                for attachment in ctx.message.attachments]
-        ]
+        channel_id = Database.get_user_channel(uid)
+        channel_id = int(channel_id) if bool(channel_id) else 0
+        channel = None
+        user = ctx.message.author
+        guild = ctx.guild
 
-        message_history = [*message_history, *message]
+        try:
+            channel = await ctx.guild.fetch_channel(channel_id)
+        except NotFound:
+            overwrites = {
+                ctx.message.author: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+                guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                guild.me: discord.PermissionOverwrite(view_channel=True)
+            }
+
+            channel = await guild.create_text_channel(f"{user.name}-finance_wizard", overwrites=overwrites, position=0)
+            Database.update_user_channel(uid, channel.id)
+        finally:
+            token = Database.get_user_token(uid)
+
+            if token:
+                await channel.send(f"""<@{uid}>
+Here is your private channel to chat.
+
+Example:
+{COMMAND_PREFIX}gpt *prompt*""")
+            else:
+                await channel.send(f"""
+<@{uid}>
+Set your OpenAI token before trying to chat.
+                
+Example:
+{COMMAND_PREFIX}token *token*
+{COMMAND_PREFIX}gpt *prompt*""")
+
+
+@bot.command(name="token")
+async def _token(ctx, *, token: str):
+    uid = ctx.message.author.id
+    channel_id = Database.get_user_channel(uid)
+    channel_id = int(channel_id) if bool(channel_id) else 0
+
+    if channel_id == ctx.message.channel.id:
+        Database.set_user_token(ctx.message.author.id, token)
+        await ctx.send("Successfully set your token.")
+    else:
+        await ctx.send(f"You can only run this command in your channel. If you can't find your channel do "
+                       f"{COMMAND_PREFIX}start in <#{ALLOWED_CHANNEL}>")
+        
+
+@bot.command(name='gpt', help='Responds with AI-generated text based on your prompt')
+async def _gpt(ctx, *, prompt: str):
+    uid = ctx.message.author.id
+    channel_id = Database.get_user_channel(uid)
+    channel_id = int(channel_id) if bool(channel_id) else 0
+    token = Database.get_user_token(uid)
+    if ctx.channel.id != channel_id:
+        await ctx.send(f"You can only run this command in your channel. If you can't find your channel do "
+                       f"{COMMAND_PREFIX}start in <#{ALLOWED_CHANNEL}>")
+    elif not DEV_MODE and not token:
+        await ctx.send(f"You have no token assigned yet. Run {COMMAND_PREFIX}token *token*")
+    else:
+        fw = FinanceWizard(uid, token)
         discord_message = await ctx.send("Give me a sec...")
 
         try:
-            message = await send_openai_messages(message_history)
-            message_history.append(message)
-            print(f"Message: {message}")
-
-            if tool_calls := message.tool_calls:
-                await discord_message.edit(content="Searching the web...")
-                print(f"Tried to run tools: {tool_calls}")
-                tool_response = await handle_tools(tool_calls)
-                message_history = [*message_history, *tool_response]
-                print(f"Tools ran with: {message}")
-                message = await send_openai_messages(message_history)
-                message_history.append(message)
-
-            set_message_history(uid, message_history)
-            await discord_message.edit(content=message.content)
-        except OpenAIError as e:
-            set_message_history(uid, [])
-            await discord_message.edit(
-                content="There was an issue reaching the server. Report this issue and try again later.")
+            async for message in fw.send_message(prompt):
+                await discord_message.edit(content=message)
+        except AuthenticationError:
+            await discord_message.edit(content="There was an authentication issue. Are you sure you properly set your "
+                                               "OpenAI token?")
             logging.error("An OpenAIError occurred", exc_info=True)
         except ToolFunctionError:
-            await discord_message.edit(
-                content="There was an issue searching the web. Report this issue and try again later."
-            )
+            await discord_message.edit(content="There was an issue searching the web. Report this issue and try again "
+                                               "later.")
             logging.error("A ToolFunctionError occurred", exc_info=True)
         except Exception as e:
-            await discord_message.edit(
-                content=f"There was an unknown error. Report this issue and try again later."
-            )
+            await discord_message.edit(content="There was an unknown error. Report this to the admins.")
             logging.error("A BaseError occurred", exc_info=True)
-
-
-@bot.command(name='clear', help='Responds with AI-generated text based on your prompt')
-async def clear(ctx):
-    uid = ctx.message.author.id
-    set_message_history(uid, None)
-
-    await ctx.send("Your message history has been cleared")
 
 
 if __name__ == "__main__":
