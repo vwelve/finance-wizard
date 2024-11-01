@@ -1,6 +1,6 @@
 import asyncio
 
-from openai import AuthenticationError
+from openai import AuthenticationError, RateLimitError
 
 from discord import NotFound
 
@@ -118,6 +118,9 @@ async def _gpt(ctx, *, prompt: str):
             await discord_message.edit(content="There was an issue searching the web. Report this issue and try again "
                                                "later.")
             logging.error("A ToolFunctionError occurred", exc_info=True)
+        except RateLimitError:
+            await discord_message.edit(content="There was a rate limit error. Try again later. If the issue persists"
+                                               "then check your account for insufficient funds.")
         except Exception as e:
             await discord_message.edit(content="There was an unknown error. Report this to the admins.")
             logging.error("A BaseError occurred", exc_info=True)
