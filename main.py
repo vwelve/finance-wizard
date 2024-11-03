@@ -60,22 +60,23 @@ async def start(ctx):
             channel = await guild.create_text_channel(f"{user.name}-finance_wizard", overwrites=overwrites, position=0)
             Database.update_user_channel(uid, channel.id)
         finally:
-            token = Database.get_user_token(uid)
+            if channel is not None:
+                token = Database.get_user_token(uid)
 
-            if token:
-                await channel.send(f"""<@{uid}>
-Here is your private channel to chat.
-
-Example:
-{COMMAND_PREFIX}gpt *prompt*""")
-            else:
-                await channel.send(f"""
-<@{uid}>
-Set your OpenAI token before trying to chat.
-                
-Example:
-{COMMAND_PREFIX}token *token*
-{COMMAND_PREFIX}gpt *prompt*""")
+                if token:
+                    await channel.send(f"""<@{uid}>
+    Here is your private channel to chat.
+    
+    Example:
+    {COMMAND_PREFIX}gpt *prompt*""")
+                else:
+                    await channel.send(f"""
+    <@{uid}>
+    Set your OpenAI token before trying to chat.`
+                    
+    Example:
+    {COMMAND_PREFIX}token *token*
+    {COMMAND_PREFIX}gpt *prompt*""")
 
 
 @bot.command(name="token")

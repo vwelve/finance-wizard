@@ -3,7 +3,9 @@ import uuid
 
 from openai import AsyncOpenAI
 
-from typing import List, AsyncGenerator, Any, Dict
+from typing import List, AsyncGenerator, Any, Dict, Union, Tuple
+
+from openai.types import Completion
 
 from gpt.tools import handle_tools, TOOLS
 from db.database import Database
@@ -46,8 +48,8 @@ class FinanceWizard:
 
                     message = {
                         "role": row[2],
-                        "content": row[3],
-                        "tools_calls": tool_calls
+                        "content": "",
+                        "tool_calls": tool_calls
                     }
                 else:
                     message = {
@@ -79,7 +81,7 @@ class FinanceWizard:
         for message in new_messages:
             if message["role"] == "tool":
                 Database.update_user_messages(self.uid, "tool", message["content"], str(message["tool_call_id"]))
-            elif "tool_calls" in message.keys():
+            elif "tool_calls" in message.keys() and len(message["tool_calls"]) > 0:
                 row_id = str(uuid.uuid4())
                 Database.update_user_messages(self.uid, str(message["role"]), message["content"], row_id, has_tool=True)
                 for tool_call in message["tool_calls"]:
@@ -87,11 +89,14 @@ class FinanceWizard:
                         row_id, tool_call["id"], tool_call["type"],
                         tool_call["function"]["name"], tool_call["function"]["arguments"]
                     )
+            else:
+                Database.update_user_messages(self.uid, message["role"], message["content"])
 
     def clear_message_history(self):
         Database.clear_message_history(self.uid)
 
-    async def create_completion(self, messages: [Dict[str, Any]]):
+    async def create_completion(self, messages: [Dict[str, Any]]) -> Tuple[Dict[str, Any], Completion]:
+        logging.info(f"create_completion({messages})")
         completion = await self.client.chat.completions.create(
             model="gpt-4o-2024-05-13",
             messages=messages,
@@ -112,7 +117,7 @@ class FinanceWizard:
 
             return ({
                 "role": completion_message.role,
-                "content": completion_message.content,
+                "content": "",
                 "tool_calls": tool_calls
             }, completion)
         else:
@@ -132,9 +137,9 @@ class FinanceWizard:
         message, completion = await self.create_completion(messages=[*message_history, user_message])
         self.update_message_history([user_message, message])
 
-        if tool_calls := message["tool_calls"]:
+        if "tool_calls" in message.keys() and len(message["tool_calls"]) > 0:
             yield "Searching the web..."
-
+            tool_calls = message["tool_calls"]
             tools = await handle_tools(tool_calls)
             message, completion = await self.create_completion(messages=
                                                                [*message_history, user_message, message, *tools])
